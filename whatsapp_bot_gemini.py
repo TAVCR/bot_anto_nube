@@ -358,7 +358,16 @@ def main():
     service = ChromeService()
     driver = webdriver.Chrome(service=service, options=options)
     driver.get("https://web.whatsapp.com/")
-    print("Por favor, escanea el código QR de WhatsApp si es necesario.")
+    print("Comando driver.get() completado. Obteniendo diagnósticos...")
+    try:
+        page_title = driver.title
+        print(f"TÍTULO DE LA PÁGINA: '{page_title}'")
+        page_source_snippet = driver.page_source.replace('\n', ' ').strip()[:500]
+        print(f"INICIO DEL HTML: {page_source_snippet}")
+    except Exception as diag_e:
+        print(f"Error al obtener diagnósticos: {diag_e}")
+
+    print("Ahora, esperando a que el elemento 'side' aparezca (120s)...")
     
     try:
         WebDriverWait(driver, 120).until(EC.presence_of_element_located((By.ID, "side")))
