@@ -348,6 +348,10 @@ def main():
     
     print("Configurando el navegador en modo headless para la nube...")
     options = Options()
+    # --- INICIO DEL DISFRAZ (USER AGENT) ---
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+    options.add_argument(f'user-agent={user_agent}')
+    # --- FIN DEL DISFRAZ ---
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
