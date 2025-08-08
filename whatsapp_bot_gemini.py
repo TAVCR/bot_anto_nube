@@ -361,7 +361,7 @@ def main():
     print("Por favor, escanea el código QR de WhatsApp si es necesario.")
     
     try:
-        WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.ID, "side")))
+        WebDriverWait(driver, 120).until(EC.presence_of_element_located((By.ID, "side")))
         print("WhatsApp Web cargado correctamente.")
     except Exception as e:
         print(f"No se pudo cargar WhatsApp Web. Error: {e}")
