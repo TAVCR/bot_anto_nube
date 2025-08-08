@@ -348,18 +348,13 @@ def main():
     
     print("Configurando el navegador en modo headless para la nube...")
     options = Options()
-    user_data_dir = os.path.join(os.path.expanduser("~"), "selenium_whatsapp_profile_stable")
-    options.add_argument(f"user-data-dir={user_data_dir}")
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920x1080")
     
-    # Importante para Heroku/Render: especificar la ubicación de chrome
-    options.binary_location = os.environ.get("GOOGLE_CHROME_BIN")
-    
-    # Dejamos que Selenium maneje el chromedriver automáticamente
+    # Dejamos que Selenium y los buildpacks se encarguen de las rutas automáticamente
     service = ChromeService()
     driver = webdriver.Chrome(service=service, options=options)
     driver.get("https://web.whatsapp.com/")
