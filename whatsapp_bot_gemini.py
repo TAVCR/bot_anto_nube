@@ -1,0 +1,361 @@
+import os
+import time
+import re
+import random
+from datetime import datetime, timezone, timedelta
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException, InvalidSessionIdException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import config
+from selenium.webdriver.chrome.service import Service as ChromeService
+import smtplib
+import ssl
+from email.message import EmailMessage
+
+# --- Configuración ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+COSTA_RICA_TZ = timezone(timedelta(hours=-6))
+CONTACT_INFO_BLOCK = f"""¡Claro! Aquí tenés toda nuestra información:
+
+📍 **Ubicación:**
+San Rafael Arriba de Desamparados, 400 Metros Sur de Walmart
+{config.LOCATION_LINK}
+
+🍽️ **Menú:**
+{config.MENU_LINK}
+
+📱 **Redes Sociales:**
+- Facebook: {config.FACEBOOK_LINK}
+- Instagram: {config.INSTAGRAM_LINK}
+- TikTok: {config.TIKTOK_LINK}
+
+¡Te esperamos! ✨"""
+HUMAN_KEYWORDS = [
+    "persona", "humano", "humana", "agente", "asesor", 
+    "hablar con alguien", "encargado", "encargada", "ayuda"
+]
+CONTACT_KEYWORDS = [
+    "teléfono", "numero", "contacto", "llamar", "escribir"
+]
+PROCESS_COOLDOWN = 120
+CONVERSATION_TIMEOUT = 90
+
+# --- Variables Globales ---
+recently_processed_chats = {}
+model = None
+
+# --- Lógica de Alertas por Correo ---
+def send_human_alert_email(user_name):
+    """Envía una alerta por correo electrónico cuando se solicita un humano."""
+    if not all([config.ALERT_EMAIL_SENDER, config.ALERT_EMAIL_PASSWORD, config.ALERT_EMAIL_RECIPIENT]):
+        print("ALERTA: Faltan datos de configuración de correo. No se puede enviar la alerta.")
+        return
+
+    subject = f"¡Alerta Humana! - Se necesita intervención en el chat de Antologías"
+    body = f"""
+    Hola,
+
+    Se ha detectado una solicitud de intervención humana en el chat de WhatsApp.
+
+    - **Cliente:** {user_name}
+    - **Hora:** {datetime.now(COSTA_RICA_TZ).strftime('%Y-%m-%d %H:%M:%S')}
+
+    Por favor, revisa la conversación en WhatsApp Web lo antes posible.
+
+    Atentamente,
+    Bot Anto
+    """
+
+    msg = EmailMessage()
+    msg.set_content(body)
+    msg['Subject'] = subject
+    msg['From'] = config.ALERT_EMAIL_SENDER
+    msg['To'] = config.ALERT_EMAIL_RECIPIENT
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(config.ALERT_EMAIL_SENDER, config.ALERT_EMAIL_PASSWORD.replace(" ", ""))
+            server.send_message(msg)
+            print(f"ALERTA HUMANA: Correo de alerta enviado exitosamente a {config.ALERT_EMAIL_RECIPIENT}.")
+    except Exception as e:
+        print(f"ALERTA HUMANA: Fallo el envío del correo de alerta. Error: {e}")
+
+# --- Inicialización ---
+def initialize_ai():
+    global model
+    if GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            print("Modelo de Gemini cargado correctamente.")
+        except Exception as e:
+            print(f"Error al configurar Gemini: {e}")
+    else:
+        print("Advertencia: La IA no funcionará sin API Key.")
+
+# --- Lógica de IA ---
+def get_gemini_response(user_message, user_name):
+    if not model:
+        return random.choice(config.AI_FALLBACK_MESSAGES)
+    try:
+        prompt = f"""
+        Eres "Anto", un asistente de IA para "Antologías", un restaurante de cocina internacional.
+
+        **REGLA #1: Saluda a `{user_name}` por su nombre de forma amigable.**
+
+        **REGLA #2: Tu misión es responder su pregunta y siempre invitarlo a ver la agenda de eventos en redes sociales.**
+
+        **REGLA #3 (MUY IMPORTANTE): NO menciones proactivamente ningún tipo de comida (como "sushi", "pizza", etc.).** Si el usuario te pregunta directamente por un tipo de comida que no manejas, simplemente responde que tu especialidad es la "cocina internacional" e invítalo a ver el menú.
+
+        **REGLA #4: Sé breve, usa "voseo" (habla de "vos") y responde en un solo párrafo.**
+
+        **REGLA #5:** Si necesitas dar información de contacto (menú, ubicación, teléfono, etc.), usa la palabra `[CONTACTO]`.
+
+        Ahora, responde al mensaje de {user_name}: "{user_message}"
+        """
+        response = model.generate_content(prompt)
+        return re.sub(r'[\*#]', '', response.text).strip()
+    except Exception as e:
+        print(f"Error al contactar con Gemini: {e}")
+        return random.choice(config.AI_FALLBACK_MESSAGES)
+
+# --- LÓGICA DEL BOT (ARQUITECTURA DE MENSAJE ÚNICO) ---
+
+def send_final_message(driver, message):
+    """Envía un único bloque de texto, manejando saltos de línea."""
+    try:
+        sanitized_text = "".join(c for c in message if c <= '\uFFFF').strip()
+        if not sanitized_text:
+            return False
+        
+        inp_xpath = '//div[@contenteditable="true"][@data-tab="10"]'
+        input_box = WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, inp_xpath)))
+        
+        input_box.clear()
+        
+        lines = sanitized_text.split('\n')
+        for i, line in enumerate(lines):
+            input_box.send_keys(line)
+            if i < len(lines) - 1:
+                input_box.send_keys(Keys.SHIFT, Keys.ENTER)
+        
+        input_box.send_keys(Keys.ENTER)
+        
+        print(f"Respuesta única enviada: {sanitized_text[:80]}...")
+        return True
+    except Exception as e:
+        print(f"Error al enviar mensaje final: {e}")
+        return False
+
+def get_final_response(message_text, has_image, user_name):
+    """Prepara un único string final para enviar. NO envía nada."""
+    message_buffer = []
+    human_handover = False
+
+    if has_image:
+        message_buffer.append(config.IMAGE_REPLY)
+    elif message_text:
+        message_lower = message_text.lower()
+
+        for keyword in HUMAN_KEYWORDS:
+            if re.search(r'\b' + re.escape(keyword) + r'\b', message_lower):
+                message_buffer.append(config.AUTO_REPLIES.get("humano", "En breve te atenderá un asesor."))
+                send_human_alert_email(user_name) # <-- ¡AQUÍ SE LLAMA A LA ALERTA!
+                human_handover = True
+                break
+        
+        if not human_handover:
+            contact_request_found = False
+            for keyword in CONTACT_KEYWORDS:
+                if re.search(r'\b' + re.escape(keyword) + r'\b', message_lower):
+                    message_buffer.append("Llamanos al 2250-4789 o escribinos por aquí a este WhatsApp")
+                    contact_request_found = True
+                    break
+
+            if not contact_request_found:
+                response_found = False
+                for keyword, reply in config.AUTO_REPLIES.items():
+                    if keyword in HUMAN_KEYWORDS: continue
+                    if re.search(r'\b' + re.escape(keyword) + r'\b', message_lower):
+                        message_buffer.append(reply)
+                        response_found = True
+                        break
+                
+                if not response_found:
+                    gemini_response = get_gemini_response(message_lower, user_name)
+                    message_buffer.append(gemini_response)
+
+    final_parts = []
+    for msg in message_buffer:
+        if "[CONTACTO]" in msg:
+            intro = msg.replace("[CONTACTO]", "").strip()
+            if intro:
+                final_parts.append(intro)
+            final_parts.append(CONTACT_INFO_BLOCK)
+        else:
+            final_parts.append(msg)
+    
+    final_response = "\n\n".join(final_parts)
+    
+    return final_response, human_handover
+
+def get_last_incoming_message_details(driver):
+    try:
+        message_bubbles = driver.find_elements(By.CSS_SELECTOR, "div.message-in")
+        if not message_bubbles: return None, None, False, None
+        last_incoming_bubble = message_bubbles[-1]
+        message_id, text = None, None
+        try: message_id = last_incoming_bubble.get_attribute("data-id")
+        except Exception: pass
+        try:
+            text_element = last_incoming_bubble.find_element(By.CSS_SELECTOR, "span.selectable-text")
+            text = text_element.text
+        except NoSuchElementException: pass
+        if not message_id or message_id.startswith("false_"):
+            try:
+                meta_element = last_incoming_bubble.find_element(By.CSS_SELECTOR, "div.copyable-text")
+                timestamp_str = meta_element.get_attribute("data-pre-plain-text")
+            except NoSuchElementException: timestamp_str = time.time()
+            message_id = f"{timestamp_str}-{text}"
+        has_image = False
+        try:
+            if last_incoming_bubble.find_element(By.CSS_SELECTOR, "div[role='img'], img[src^='blob:']"):
+                has_image = True
+        except NoSuchElementException: pass
+        return text, 'in', has_image, message_id
+    except (NoSuchElementException, StaleElementReferenceException) as e:
+        print(f"[DEBUG] Error en get_last_incoming_message_details: {e}")
+        return None, None, False, None
+
+def handle_conversation(driver, user_name, initial_message_id):
+    """Maneja la conversación después del primer mensaje."""
+    print(f"Iniciando modo conversación con '{user_name}'.")
+    last_processed_message_id = initial_message_id
+    start_time = time.time()
+    
+    while time.time() - start_time < CONVERSATION_TIMEOUT:
+        text, _, has_image, message_id = get_last_incoming_message_details(driver)
+        
+        if message_id and message_id != last_processed_message_id:
+            print(f"Nuevo mensaje en conversación con '{user_name}': {text}")
+            last_processed_message_id = message_id
+            
+            final_response, human_handover = get_final_response(text, has_image, user_name)
+            
+            if final_response:
+                send_final_message(driver, final_response)
+            
+            if human_handover:
+                print(f"ALERTA HUMANA en conversación: Usuario '{user_name}' necesita ayuda.")
+                break
+            
+            start_time = time.time()
+        
+        time.sleep(3)
+    
+    print(f"Fin del modo conversación con '{user_name}'.")
+
+def find_and_process_unread_chat(driver):
+    try:
+        current_time = time.time()
+        for user, timestamp in list(recently_processed_chats.items()):
+            if current_time - timestamp > PROCESS_COOLDOWN:
+                del recently_processed_chats[user]
+
+        unread_chat_xpath = "//div[contains(@class, '_ak8l') and .//span[contains(@aria-label, 'mensaje no leído')]]"
+        unread_chats = driver.find_elements(By.XPATH, unread_chat_xpath)
+        if not unread_chats: return False
+
+        chat_to_process, user_name = None, None
+        for chat_element in unread_chats:
+            try:
+                user_id_element = chat_element.find_element(By.XPATH, ".//span[@title]")
+                title = user_id_element.get_attribute("title")
+                if title and title in recently_processed_chats:
+                    continue
+                chat_to_process = chat_element
+                user_name = title
+                break
+            except Exception: continue
+
+        if not chat_to_process: return False
+
+        print(f"Procesando chat con '{user_name}'.")
+        chat_to_process.click()
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, '//div[@contenteditable="true"][@data-tab="10"]')))
+        
+        text, msg_type, has_image, message_id = get_last_incoming_message_details(driver)
+
+        if msg_type == 'in':
+            if user_name:
+                recently_processed_chats[user_name] = time.time()
+
+            final_response, human_handover = get_final_response(text, has_image, user_name)
+            
+            if final_response:
+                send_final_message(driver, final_response)
+
+            if not human_handover:
+                handle_conversation(driver, user_name, message_id)
+
+            return True
+        return False
+    except Exception as e:
+        print(f"Error buscando chats no leídos: {e}")
+        return False
+
+def main():
+    initialize_ai()
+    if not model:
+        print("El bot no puede iniciar sin la IA configurada.")
+        return
+    
+    print("Configurando el navegador en modo headless para la nube...")
+    options = Options()
+    user_data_dir = os.path.join(os.path.expanduser("~"), "selenium_whatsapp_profile_stable")
+    options.add_argument(f"user-data-dir={user_data_dir}")
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920x1080")
+    
+    # Importante para Heroku/Render: especificar la ubicación de chrome y chromedriver
+    options.binary_location = os.environ.get("GOOGLE_CHROME_BIN")
+    
+    service = ChromeService(executable_path=os.environ.get("CHROMEDRIVER_PATH"))
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.get("https://web.whatsapp.com/")
+    print("Por favor, escanea el código QR de WhatsApp si es necesario.")
+    
+    try:
+        WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.ID, "side")))
+        print("WhatsApp Web cargado correctamente.")
+    except Exception as e:
+        print(f"No se pudo cargar WhatsApp Web. Error: {e}")
+        driver.quit()
+        return
+
+    print("Bot con IA de Gemini iniciado. Presiona Ctrl+C para detener.")
+    while True:
+        try:
+            if not find_and_process_unread_chat(driver):
+                time.sleep(5)
+        except KeyboardInterrupt:
+            print("\nCerrando el bot.")
+            break
+        except InvalidSessionIdException:
+            print("\nSesión de Selenium inválida.")
+            break
+        except Exception as e:
+            print(f"Ocurrió un error en el bucle principal: {e}")
+            time.sleep(10)
+    driver.quit()
+
+if __name__ == "__main__":
+    main()
