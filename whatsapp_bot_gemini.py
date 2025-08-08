@@ -357,32 +357,33 @@ def main():
     # Dejamos que Selenium y los buildpacks se encarguen de las rutas automáticamente
     service = ChromeService()
     driver = webdriver.Chrome(service=service, options=options)
-    # Agregamos un tiempo de espera máximo para la carga de la página
     driver.set_page_load_timeout(120)
 
     try:
         print("Intentando cargar https://web.whatsapp.com/ (max 120s)...")
         driver.get("https://web.whatsapp.com/")
     except Exception as e:
-        print(f"¡ERROR! La carga de la página superó el tiempo de espera o falló: {e}")
-        print("--- INICIANDO DIAGNÓSTICO DE PÁGINA ATASCADA ---")
-        try:
-            page_title = driver.title
-            print(f"TÍTULO DE LA PÁGINA ATASCADA: '{page_title}'")
-            page_source_snippet = driver.page_source.replace('\n', ' ').strip()[:800]
-            print(f"INICIO DEL HTML ATASCADO: {page_source_snippet}")
-        except Exception as diag_e:
-            print(f"Error al obtener diagnósticos de la página atascada: {diag_e}")
-        print("--- FIN DEL DIAGNÓSTICO ---")
+        print(f"¡ERROR CRÍTICO! La carga de la página falló: {e}")
         driver.quit()
-        return # Detenemos la ejecución del bot
+        return
 
-    print("Página cargada. Ahora, esperando a que el elemento 'side' aparezca (120s)...")
-    
+    print("¡Página cargada! Realizando diagnóstico final para ver QUÉ página se cargó...")
+    try:
+        page_title = driver.title
+        print(f"TÍTULO DE LA PÁGINA CARGADA: '{page_title}'")
+        page_source_snippet = driver.page_source.replace('\n', ' ').strip()[:1000]
+        print(f"INICIO DEL HTML CARGADO: {page_source_snippet}")
+    except Exception as diag_e:
+        print(f"Error al obtener diagnósticos: {diag_e}")
+
+    print("Ahora, intentando encontrar el elemento 'side' (120s)...")
     try:
         WebDriverWait(driver, 120).until(EC.presence_of_element_located((By.ID, "side")))
         print("WhatsApp Web cargado correctamente.")
     except Exception as e:
+        print(f"No se pudo encontrar el elemento 'side'. El bot se detendrá. Error: {e}")
+        driver.quit()
+        return
         print(f"No se pudo cargar WhatsApp Web. Error: {e}")
         driver.quit()
         return
